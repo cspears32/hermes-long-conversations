@@ -85,3 +85,22 @@ def test_plugin_registration():
     assert "long_conv_handoff" in ctx.tools
     assert "long_conv_load" in ctx.tools
     assert "long_conv_list" in ctx.tools
+
+
+def test_beta_telemetry_opt_in(tmp_path, monkeypatch):
+    from long_conversations.telemetry import log_beta_event, BETA_ENV_FLAG
+    base_dir = tmp_path / "long-conversations"
+
+    # Disabled by default
+    monkeypatch.delenv(BETA_ENV_FLAG, raising=False)
+    log_beta_event("test_event", {"foo": "bar"}, base_dir=tmp_path)
+    assert not (base_dir / "beta_events.jsonl").exists()
+
+    # Enabled via env flag
+    monkeypatch.setenv(BETA_ENV_FLAG, "1")
+    log_beta_event("test_event", {"foo": "bar"}, base_dir=tmp_path)
+    log_path = base_dir / "beta_events.jsonl"
+    assert log_path.exists()
+    content = log_path.read_text(encoding="utf-8")
+    assert "test_event" in content
+    assert "foo" in content

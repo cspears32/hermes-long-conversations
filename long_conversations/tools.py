@@ -12,6 +12,7 @@ from .storage import (
     save_brief,
     set_pending_continuation,
 )
+from .telemetry import log_beta_event
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ def tool_long_conv_handoff(
     )
     save_brief(brief)
     set_pending_continuation(sid)
+    log_beta_event("handoff_created", {"session_id": sid, "topic": topic})
     return {
         "success": True,
         "message": f"Handoff brief saved for session '{sid}'. Ready for continuation in a fresh session.",

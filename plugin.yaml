@@ -1,0 +1,12 @@
+name: long-conversations
+version: 0.1.0
+description: "Persistent long-term conversations across session boundaries via structured handoff briefs."
+author: "cspears32"
+provides_hooks:
+  - pre_llm_call
+  - on_session_start
+  - on_session_end
+provides_tools:
+  - long_conv_handoff
+  - long_conv_load
+  - long_conv_list

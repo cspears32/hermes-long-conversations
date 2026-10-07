@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
+from .storage import get_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,3 +24,15 @@ def check_token_threshold(
     if threshold_tokens > 0:
         return last_tokens >= (threshold_tokens * threshold_ratio)
     return False
+
+
+def get_threshold_ratio_from_config() -> float:
+    """Read threshold_ratio from config.yaml."""
+    config = get_config()
+    return config.get("threshold_ratio", 0.80)
+
+
+def is_aggressive_mode() -> bool:
+    """Read aggressive_mode from config.yaml."""
+    config = get_config()
+    return config.get("aggressive_mode", False)

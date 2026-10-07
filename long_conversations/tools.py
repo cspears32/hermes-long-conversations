@@ -5,11 +5,14 @@ from typing import Any, Dict, List, Optional
 
 from .brief import create_handoff_brief, format_brief_for_injection
 from .lineage import get_parent_chain
+from .monitor import is_aggressive_mode
 from .storage import (
     get_base_dir,
+    get_config,
     list_briefs,
     load_brief,
     save_brief,
+    save_config,
     set_pending_continuation,
 )
 from .telemetry import log_beta_event
@@ -78,4 +81,50 @@ def tool_long_conv_list() -> Dict[str, Any]:
             }
             for b in briefs
         ],
+    }
+
+
+def tool_long_conv_config_get() -> Dict[str, Any]:
+    """Return current plugin configuration."""
+    config = get_config()
+    config["aggressive_mode"] = is_aggressive_mode()
+    return {
+        "success": True,
+        "config": config,
+    }
+
+
+def tool_long_conv_config_set(
+    aggressive_mode: Optional[bool] = None,
+    threshold_ratio: Optional[float] = None,
+    prune_days: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Update plugin configuration. Only sets fields that are provided."""
+    config = get_config()
+    changes = []
+    
+    if aggressive_mode is not None:
+        config["aggressive_mode"] = aggressive_mode
+        changes.append(f"aggressive_mode: {aggressive_mode}")
+    
+    if threshold_ratio is not None:
+        if not (0.0 < threshold_ratio <= 1.0):
+            return {"success": False, "error": "threshold_ratio must be between 0.0 and 1.0"}
+        config["threshold_ratio"] = threshold_ratio
+        changes.append(f"threshold_ratio: {threshold_ratio}")
+    
+    if prune_days is not None:
+        if prune_days < 1:
+            return {"success": False, "error": "prune_days must be >= 1"}
+        config["prune_days"] = prune_days
+        changes.append(f"prune_days: {prune_days}")
+    
+    if not changes:
+        return {"success": True, "message": "No changes specified", "config": config}
+    
+    save_config(config)
+    return {
+        "success": True,
+        "message": f"Config updated: {', '.join(changes)}",
+        "config": config,
     }

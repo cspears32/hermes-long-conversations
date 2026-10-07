@@ -15,5 +15,7 @@ capabilities:
     - long_conv_load
     - long_conv_recover
     - long_conv_list
+    - long_conv_config_get
+    - long_conv_config_set
   cli_commands:
     - long-conv

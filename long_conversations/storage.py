@@ -7,6 +7,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -119,3 +124,38 @@ def prune_old_briefs(days: int = 14, base_dir: Optional[Path] = None) -> int:
         except OSError:
             continue
     return pruned_count
+
+
+# ─── Config file support ───────────────────────────────────────────────────
+
+def get_config(base_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Read config.yaml, falling back to defaults."""
+    config_path = get_config_path(base_dir)
+    defaults = dict(DEFAULT_CONFIG)
+    if not config_path.exists():
+        return defaults
+    if yaml is None:
+        logger.warning("PyYAML not available; using default config")
+        return defaults
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            user_config = yaml.safe_load(f) or {}
+        defaults.update(user_config)
+        return defaults
+    except Exception as e:
+        logger.error("Failed to read config: %s; using defaults", e)
+        return defaults
+
+
+def save_config(config: Dict[str, Any], base_dir: Optional[Path] = None) -> None:
+    """Write config dict to config.yaml."""
+    config_path = get_config_path(base_dir)
+    if yaml is None:
+        logger.error("Cannot save config — PyYAML not installed")
+        return
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, default_flow_style=False)
+    except Exception as e:
+        logger.error("Failed to save config: %s", e)

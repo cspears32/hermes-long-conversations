@@ -104,3 +104,54 @@ def test_beta_telemetry_opt_in(tmp_path, monkeypatch):
     content = log_path.read_text(encoding="utf-8")
     assert "test_event" in content
     assert "foo" in content
+
+
+def test_config_save_and_load(tmp_path, monkeypatch):
+    from long_conversations.storage import get_config, save_config, get_config_path
+    from long_conversations.monitor import is_aggressive_mode, get_threshold_ratio_from_config
+
+    base_dir = tmp_path / "long-conversations"
+
+    # Default config
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    config = get_config(base_dir=base_dir)
+    assert config["threshold_ratio"] == 0.80
+    assert config["prune_days"] == 14
+    assert config["aggressive_mode"] is False
+
+    # Save and reload
+    config["aggressive_mode"] = True
+    config["threshold_ratio"] = 0.75
+    config["prune_days"] = 7
+    save_config(config, base_dir=base_dir)
+
+    reloaded = get_config(base_dir=base_dir)
+    assert reloaded["aggressive_mode"] is True
+    assert reloaded["threshold_ratio"] == 0.75
+    assert reloaded["prune_days"] == 7
+
+
+def test_config_tools(tmp_path):
+    from long_conversations.tools import (
+        tool_long_conv_config_get,
+        tool_long_conv_config_set,
+    )
+
+    # Get default
+    result = tool_long_conv_config_get()
+    assert result["success"] is True
+    assert "config" in result
+
+    # Set aggressive mode
+    result = tool_long_conv_config_set(aggressive_mode=True)
+    assert result["success"] is True
+    assert "aggressive_mode: True" in result["message"]
+
+    # Invalid threshold
+    result = tool_long_conv_config_set(threshold_ratio=1.5)
+    assert result["success"] is False
+    assert "threshold_ratio must be between" in result["error"]
+
+    # Reload and verify
+    result = tool_long_conv_config_get()
+    assert result["config"]["aggressive_mode"] is True

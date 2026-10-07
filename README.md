@@ -6,6 +6,20 @@ Monitors token usage, extracts structured handoff briefs before context limits h
 
 ---
 
+## How It Works
+
+```text
+Standard Compaction (Lossy):
+[Turn 1 ... 50] (16k tokens) ──► [Context Full] ──► [Lossy Summary] ──► Hallucinations / Lost State
+
+With Long Conversations (Preserved):
+[Session A] (16k tokens) ──► [Auto-Handoff Brief] ──► [Session B (/new)] (~250 tokens, 100% state)
+                                  │
+                                  └──► WIP / Modified Files / Decisions / Next Steps
+```
+
+---
+
 ## Features
 
 - **Token Monitoring:** Triggers alerts or auto-handoffs at context threshold (default 80%).

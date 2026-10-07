@@ -2,6 +2,9 @@ name: long-conversations
 version: 0.1.0
 description: "Persistent long-term conversations across session boundaries via structured handoff briefs."
 author: "cspears32"
+license: MIT
+category: tools
+requires_hermes: ">=0.19"
 provides_hooks:
   - pre_llm_call
   - on_session_start
@@ -10,3 +13,7 @@ provides_tools:
   - long_conv_handoff
   - long_conv_load
   - long_conv_list
+  - long_conv_config_get
+  - long_conv_config_set
+cli_commands:
+  - long-conv

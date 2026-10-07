@@ -6,17 +6,17 @@ Monitors token usage, extracts structured handoff briefs before context limits h
 
 ---
 
-## How It Works
+## Why Use This: Standard Compaction vs. Long Conversations
 
-```text
-Standard Compaction (Lossy):
-[Turn 1 ... 50] (16k tokens) ──► [Context Full] ──► [Lossy Summary] ──► Hallucinations / Lost State
-
-With Long Conversations (Preserved):
-[Session A] (16k tokens) ──► [Auto-Handoff Brief] ──► [Session B (/new)] (~250 tokens, 100% state)
-                                  │
-                                  └──► WIP / Modified Files / Decisions / Next Steps
-```
+| Dimension | Standard Compaction | Long Conversations Plugin |
+| :--- | :--- | :--- |
+| **Trigger Timing** | **Reactive:** Triggers after context is exhausted or hitting provider hard limits. | **Proactive:** `pre_llm_call` hook intercepts at a configurable watermark (e.g. 80%) before degradation. |
+| **What is Saved** | **Conversation Dialogue:** Compresses chat transcripts (user/assistant banter, tool output logs). | **Execution State:** Extracts only operational facts (active files, key decisions, negative constraints, next step). |
+| **Context Overhead** | **High Bloat (3k–6k+ tokens):** Multi-paragraph summaries + residual baggage linger in active memory. | **Zero Bloat (~250 tokens):** Fresh session starts with 99% context headroom available for execution. |
+| **Attention & Drift** | **High Degradation:** Outdated tool logs and discarded paths distract attention heads. | **Zero Context Poisoning:** Clean slate eliminates transcript drift and prompt-length penalties. |
+| **Failure Traps** | **Repeats Mistakes:** Free-form summaries rarely record what failed, leading to looped errors. | **Explicit Dead-Ends:** Dedicated `dead_ends` field prevents re-trying invalidated approaches. |
+| **Session Provenance** | **Fragmented:** Starting `/new` breaks session continuity and loses history. | **Lineage DAG:** Auto-links parent $\rightarrow$ child sessions in `lineage.json` with inspectable history. |
+| **Local Model Fit** | **Poor:** 3B–8B local LLMs struggle with bloated summaries and long attention spans. | **Optimized:** Tiny ~250-token payload fits effortlessly into 4k–16k local context windows. |
 
 ---
 

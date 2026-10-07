@@ -73,8 +73,8 @@ def test_plugin_registration():
         def register_hook(self, name, handler):
             self.hooks[name] = handler
 
-        def register_tool(self, name, description, handler):
-            self.tools[name] = {"description": description, "handler": handler}
+        def register_tool(self, name, **kwargs):
+            self.tools[name] = kwargs
 
     ctx = MockCtx()
     register(ctx)

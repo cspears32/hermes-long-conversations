@@ -19,6 +19,69 @@ from .telemetry import log_beta_event
 
 logger = logging.getLogger(__name__)
 
+HANDOFF_SCHEMA = {
+    "name": "long_conv_handoff",
+    "description": "Generate a handoff brief and prepare a continuation session.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "topic": {"type": "string", "description": "Core subject or objective"},
+            "work_in_progress": {"type": "string", "description": "Current status and active tasks"},
+            "decisions_made": {"type": "array", "items": {"type": "string"}, "description": "Key choices settled"},
+            "active_state_files": {"type": "array", "items": {"type": "string"}, "description": "Active files/configs"},
+            "key_assumptions": {"type": "array", "items": {"type": "string"}, "description": "Working assumptions"},
+            "open_questions": {"type": "array", "items": {"type": "string"}, "description": "Unresolved questions"},
+            "dead_ends": {"type": "array", "items": {"type": "string"}, "description": "Approaches that failed"},
+            "next_step": {"type": "string", "description": "Immediate next action"},
+            "session_id": {"type": "string", "description": "Optional session ID override"},
+        },
+        "required": ["topic", "work_in_progress"],
+    },
+}
+
+LOAD_SCHEMA = {
+    "name": "long_conv_load",
+    "description": "Load an existing handoff brief by session ID for continuation.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "session_id": {"type": "string", "description": "Session ID of the brief to load"},
+        },
+        "required": ["session_id"],
+    },
+}
+
+LIST_SCHEMA = {
+    "name": "long_conv_list",
+    "description": "List saved handoff briefs.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
+CONFIG_GET_SCHEMA = {
+    "name": "long_conv_config_get",
+    "description": "Get current plugin configuration.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
+CONFIG_SET_SCHEMA = {
+    "name": "long_conv_config_set",
+    "description": "Update plugin configuration (aggressive_mode, threshold_ratio, prune_days).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "aggressive_mode": {"type": "boolean", "description": "Enable automatic aggressive handoffs"},
+            "threshold_ratio": {"type": "number", "description": "Context threshold ratio (0.0 to 1.0)"},
+            "prune_days": {"type": "integer", "description": "Days before stale briefs are cleaned"},
+        },
+    },
+}
+
 
 def tool_long_conv_handoff(
     topic: str,

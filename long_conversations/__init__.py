@@ -22,6 +22,11 @@ from .storage import (
 )
 from .telemetry import log_beta_event
 from .tools import (
+    CONFIG_GET_SCHEMA,
+    CONFIG_SET_SCHEMA,
+    HANDOFF_SCHEMA,
+    LIST_SCHEMA,
+    LOAD_SCHEMA,
     tool_long_conv_config_get,
     tool_long_conv_config_set,
     tool_long_conv_handoff,
@@ -168,26 +173,36 @@ def register(ctx: Any) -> None:
     if hasattr(ctx, "register_tool"):
         ctx.register_tool(
             name="long_conv_handoff",
-            description="Generate a handoff brief and prepare a continuation session.",
+            toolset="long-conversations",
+            schema=HANDOFF_SCHEMA,
             handler=tool_long_conv_handoff,
+            description="Generate a handoff brief and prepare a continuation session.",
         )
         ctx.register_tool(
             name="long_conv_load",
-            description="Load an existing handoff brief by session ID for continuation.",
+            toolset="long-conversations",
+            schema=LOAD_SCHEMA,
             handler=tool_long_conv_load,
+            description="Load an existing handoff brief by session ID for continuation.",
         )
         ctx.register_tool(
             name="long_conv_list",
-            description="List saved handoff briefs.",
+            toolset="long-conversations",
+            schema=LIST_SCHEMA,
             handler=tool_long_conv_list,
+            description="List saved handoff briefs.",
         )
         ctx.register_tool(
             name="long_conv_config_get",
-            description="Get current plugin configuration.",
+            toolset="long-conversations",
+            schema=CONFIG_GET_SCHEMA,
             handler=tool_long_conv_config_get,
+            description="Get current plugin configuration.",
         )
         ctx.register_tool(
             name="long_conv_config_set",
-            description="Update plugin configuration (aggressive_mode, threshold_ratio, prune_days).",
+            toolset="long-conversations",
+            schema=CONFIG_SET_SCHEMA,
             handler=tool_long_conv_config_set,
+            description="Update plugin configuration (aggressive_mode, threshold_ratio, prune_days).",
         )

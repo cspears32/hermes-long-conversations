@@ -43,3 +43,9 @@ threshold_ratio: 0.80     # Context utilization threshold (0.0–1.0)
 aggressive_mode: false    # Auto-generate handoff on threshold
 prune_days: 14            # Stale brief retention window
 ```
+
+---
+
+## Acknowledgments & Prior Art
+
+Inspired by and adapted from the auto-handoff architecture pioneered by [`claude-auto-handoff`](https://github.com/alexknowshtml/claude-auto-handoff) by Alex MacCaw, re-engineered for the Hermes Agent plugin ecosystem and local model constraints.

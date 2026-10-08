@@ -34,6 +34,7 @@ HANDOFF_SCHEMA = {
             "dead_ends": {"type": "array", "items": {"type": "string"}, "description": "Approaches that failed"},
             "next_step": {"type": "string", "description": "Immediate next action"},
             "session_id": {"type": "string", "description": "Optional session ID override"},
+            "scope_key": {"type": "string", "description": "Optional chat or scope key to bind continuation"},
         },
         "required": ["topic", "work_in_progress"],
     },
@@ -46,6 +47,7 @@ LOAD_SCHEMA = {
         "type": "object",
         "properties": {
             "session_id": {"type": "string", "description": "Session ID of the brief to load"},
+            "scope_key": {"type": "string", "description": "Optional chat or scope key to bind continuation"},
         },
         "required": ["session_id"],
     },
@@ -83,47 +85,63 @@ CONFIG_SET_SCHEMA = {
 }
 
 
-def tool_long_conv_handoff(
-    topic: str,
-    work_in_progress: str,
-    decisions_made: Optional[List[str]] = None,
-    active_state_files: Optional[List[str]] = None,
-    key_assumptions: Optional[List[str]] = None,
-    open_questions: Optional[List[str]] = None,
-    dead_ends: Optional[List[str]] = None,
-    next_step: str = "",
-    session_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    sid = session_id or "current_session"
-    brief = create_handoff_brief(
-        source_session_id=sid,
-        topic=topic,
-        work_in_progress=work_in_progress,
-        decisions_made=decisions_made,
-        active_state_files=active_state_files,
-        key_assumptions=key_assumptions,
-        open_questions=open_questions,
-        dead_ends=dead_ends,
-        next_step=next_step,
-    )
-    save_brief(brief)
-    set_pending_continuation(sid)
-    log_beta_event("handoff_created", {"session_id": sid, "topic": topic})
-    return {
-        "success": True,
-        "message": f"Handoff brief saved for session '{sid}'. Ready for continuation in a fresh session.",
-        "brief": brief,
-    }
+def tool_long_conv_handoff(args: dict, **kwargs: Any) -> Dict[str, Any]:
+    topic = args.get("topic", "")
+    work_in_progress = args.get("work_in_progress", "")
+    decisions_made = args.get("decisions_made")
+    active_state_files = args.get("active_state_files")
+    key_assumptions = args.get("key_assumptions")
+    open_questions = args.get("open_questions")
+    dead_ends = args.get("dead_ends")
+    next_step = args.get("next_step", "")
+    session_id = args.get("session_id") or kwargs.get("session_id") or "current_session"
+    scope_key = args.get("scope_key") or kwargs.get("chat_id") or kwargs.get("channel_id")
+
+    try:
+        brief = create_handoff_brief(
+            source_session_id=session_id,
+            topic=topic,
+            work_in_progress=work_in_progress,
+            decisions_made=decisions_made,
+            active_state_files=active_state_files,
+            key_assumptions=key_assumptions,
+            open_questions=open_questions,
+            dead_ends=dead_ends,
+            next_step=next_step,
+        )
+        save_brief(brief)
+        set_pending_continuation(session_id, scope_key=scope_key)
+        log_beta_event("handoff_created", {"session_id": session_id, "topic": topic})
+        return {
+            "success": True,
+            "message": f"Handoff brief saved for session '{session_id}'. Ready for continuation in a fresh session.",
+            "brief": brief,
+        }
+    except Exception as e:
+        logger.exception("Failed to create handoff brief: %s", e)
+        return {
+            "success": False,
+            "error": str(e),
+        }
 
 
-def tool_long_conv_load(session_id: str) -> Dict[str, Any]:
+def tool_long_conv_load(args: dict, **kwargs: Any) -> Dict[str, Any]:
+    session_id = args.get("session_id", "")
+    scope_key = args.get("scope_key") or kwargs.get("chat_id") or kwargs.get("channel_id")
+    if not session_id:
+        return {"success": False, "error": "session_id is required"}
+
     brief = load_brief(session_id)
     if not brief:
         return {
             "success": False,
             "error": f"No brief found for session ID: {session_id}",
         }
-    set_pending_continuation(session_id)
+    try:
+        set_pending_continuation(session_id, scope_key=scope_key)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
     return {
         "success": True,
         "message": f"Loaded brief for '{session_id}' as pending continuation.",
@@ -131,7 +149,7 @@ def tool_long_conv_load(session_id: str) -> Dict[str, Any]:
     }
 
 
-def tool_long_conv_list() -> Dict[str, Any]:
+def tool_long_conv_list(args: Optional[dict] = None, **kwargs: Any) -> Dict[str, Any]:
     briefs = list_briefs()
     return {
         "success": True,
@@ -147,7 +165,7 @@ def tool_long_conv_list() -> Dict[str, Any]:
     }
 
 
-def tool_long_conv_config_get() -> Dict[str, Any]:
+def tool_long_conv_config_get(args: Optional[dict] = None, **kwargs: Any) -> Dict[str, Any]:
     """Return current plugin configuration."""
     config = get_config()
     config["aggressive_mode"] = is_aggressive_mode()
@@ -157,30 +175,38 @@ def tool_long_conv_config_get() -> Dict[str, Any]:
     }
 
 
-def tool_long_conv_config_set(
-    aggressive_mode: Optional[bool] = None,
-    threshold_ratio: Optional[float] = None,
-    prune_days: Optional[int] = None,
-) -> Dict[str, Any]:
+def tool_long_conv_config_set(args: dict, **kwargs: Any) -> Dict[str, Any]:
     """Update plugin configuration. Only sets fields that are provided."""
     config = get_config()
     changes = []
     
+    aggressive_mode = args.get("aggressive_mode")
+    threshold_ratio = args.get("threshold_ratio")
+    prune_days = args.get("prune_days")
+
     if aggressive_mode is not None:
-        config["aggressive_mode"] = aggressive_mode
+        config["aggressive_mode"] = bool(aggressive_mode)
         changes.append(f"aggressive_mode: {aggressive_mode}")
     
     if threshold_ratio is not None:
-        if not (0.0 < threshold_ratio <= 1.0):
-            return {"success": False, "error": "threshold_ratio must be between 0.0 and 1.0"}
-        config["threshold_ratio"] = threshold_ratio
-        changes.append(f"threshold_ratio: {threshold_ratio}")
+        try:
+            val = float(threshold_ratio)
+            if not (0.0 < val <= 1.0):
+                return {"success": False, "error": "threshold_ratio must be between 0.0 and 1.0"}
+            config["threshold_ratio"] = val
+            changes.append(f"threshold_ratio: {val}")
+        except (ValueError, TypeError):
+            return {"success": False, "error": "threshold_ratio must be a valid float"}
     
     if prune_days is not None:
-        if prune_days < 1:
-            return {"success": False, "error": "prune_days must be >= 1"}
-        config["prune_days"] = prune_days
-        changes.append(f"prune_days: {prune_days}")
+        try:
+            val = int(prune_days)
+            if val < 1:
+                return {"success": False, "error": "prune_days must be >= 1"}
+            config["prune_days"] = val
+            changes.append(f"prune_days: {val}")
+        except (ValueError, TypeError):
+            return {"success": False, "error": "prune_days must be a valid integer"}
     
     if not changes:
         return {"success": True, "message": "No changes specified", "config": config}

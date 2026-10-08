@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -12,7 +13,16 @@ try:
 except ImportError:
     yaml = None
 
+try:
+    from hermes_constants import get_hermes_home
+except ImportError:
+    def get_hermes_home() -> Path:
+        env_home = os.environ.get("HERMES_HOME")
+        return Path(env_home) if env_home else Path.home() / ".hermes"
+
 logger = logging.getLogger(__name__)
+
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "threshold_ratio": 0.80,
@@ -21,12 +31,20 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
+def validate_session_id(session_id: str) -> str:
+    """Validate session_id matches ^[A-Za-z0-9_.-]{1,128}$."""
+    if not isinstance(session_id, str) or not SESSION_ID_PATTERN.match(session_id):
+        raise ValueError(
+            f"Invalid session_id: {session_id!r}. Must match regex '^[A-Za-z0-9_.-]{{1,128}}$'"
+        )
+    return session_id
+
+
 def get_base_dir(hermes_home: Optional[Path | str] = None) -> Path:
     if hermes_home is not None:
         base = Path(hermes_home)
     else:
-        env_home = os.environ.get("HERMES_HOME")
-        base = Path(env_home) if env_home else Path.home() / ".hermes"
+        base = get_hermes_home()
     target = base / "long-conversations"
     target.mkdir(parents=True, exist_ok=True)
     (target / "briefs").mkdir(parents=True, exist_ok=True)
@@ -47,20 +65,36 @@ def get_lineage_path(base_dir: Optional[Path] = None) -> Path:
     return (base_dir or get_base_dir()) / "lineage.json"
 
 
-def get_pending_continuation_path(base_dir: Optional[Path] = None) -> Path:
-    return (base_dir or get_base_dir()) / ".pending_continuation"
+def get_pending_continuation_path(scope_key: Optional[str] = None, base_dir: Optional[Path] = None) -> Path:
+    base = base_dir or get_base_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    if scope_key:
+        valid_key = validate_session_id(scope_key)
+        pending_dir = base / "pending"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        return pending_dir / f"{valid_key}.json"
+    return base / ".pending_continuation"
+
+
+def _safe_brief_path(session_id: str, base_dir: Optional[Path] = None) -> Path:
+    validate_session_id(session_id)
+    briefs_dir = get_briefs_dir(base_dir)
+    target_path = briefs_dir / f"{session_id}.json"
+    if not target_path.resolve().is_relative_to(briefs_dir.resolve()):
+        raise ValueError(f"Path traversal detected: {session_id!r}")
+    return target_path
 
 
 def save_brief(brief: Dict[str, Any], base_dir: Optional[Path] = None) -> Path:
     session_id = brief.get("source_session_id") or f"session_{int(time.time())}"
-    path = get_briefs_dir(base_dir) / f"{session_id}.json"
+    path = _safe_brief_path(session_id, base_dir)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(brief, f, indent=2)
     return path
 
 
 def load_brief(session_id: str, base_dir: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    path = get_briefs_dir(base_dir) / f"{session_id}.json"
+    path = _safe_brief_path(session_id, base_dir)
     if not path.exists():
         return None
     try:
@@ -85,15 +119,27 @@ def list_briefs(base_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
     return briefs
 
 
-def set_pending_continuation(session_id: str, base_dir: Optional[Path] = None) -> None:
-    path = get_pending_continuation_path(base_dir)
-    payload = {"session_id": session_id, "timestamp": time.time()}
+def set_pending_continuation(
+    session_id: str,
+    scope_key: Optional[str] = None,
+    base_dir: Optional[Path] = None,
+) -> None:
+    validate_session_id(session_id)
+    path = get_pending_continuation_path(scope_key, base_dir)
+    payload = {
+        "session_id": session_id,
+        "scope_key": scope_key,
+        "timestamp": time.time(),
+    }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f)
 
 
-def get_pending_continuation(base_dir: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    path = get_pending_continuation_path(base_dir)
+def get_pending_continuation(
+    scope_key: Optional[str] = None,
+    base_dir: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    path = get_pending_continuation_path(scope_key, base_dir)
     if not path.exists():
         return None
     try:
@@ -103,8 +149,11 @@ def get_pending_continuation(base_dir: Optional[Path] = None) -> Optional[Dict[s
         return None
 
 
-def clear_pending_continuation(base_dir: Optional[Path] = None) -> None:
-    path = get_pending_continuation_path(base_dir)
+def clear_pending_continuation(
+    scope_key: Optional[str] = None,
+    base_dir: Optional[Path] = None,
+) -> None:
+    path = get_pending_continuation_path(scope_key, base_dir)
     if path.exists():
         try:
             path.unlink()

@@ -38,13 +38,13 @@ hermes plugins enable long-conversations
 
 ---
 
-## Commands & Tools
+## Tools
 
-- `/long-conv handoff` (`long_conv_handoff`): Generate brief and stage continuation.
-- `/long-conv list` (`long_conv_list`): List saved session briefs.
-- `/long-conv load <id>` (`long_conv_load`): Load brief by session ID.
-- `/long-conv config get` (`long_conv_config_get`): View active configuration.
-- `/long-conv config set <key> <val>` (`long_conv_config_set`): Update configuration.
+- `long_conv_handoff`: Generate brief and stage continuation.
+- `long_conv_list`: List saved session briefs.
+- `long_conv_load`: Load brief by session ID.
+- `long_conv_config_get`: View active configuration.
+- `long_conv_config_set`: Update configuration.
 
 ---
 

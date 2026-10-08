@@ -143,12 +143,12 @@ def test_config_tools(tmp_path):
     assert "config" in result
 
     # Set aggressive mode
-    result = tool_long_conv_config_set(aggressive_mode=True)
+    result = tool_long_conv_config_set({"aggressive_mode": True})
     assert result["success"] is True
     assert "aggressive_mode: True" in result["message"]
 
     # Invalid threshold
-    result = tool_long_conv_config_set(threshold_ratio=1.5)
+    result = tool_long_conv_config_set({"threshold_ratio": 1.5})
     assert result["success"] is False
     assert "threshold_ratio must be between" in result["error"]
 

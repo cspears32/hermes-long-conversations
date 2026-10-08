@@ -15,5 +15,4 @@ provides_tools:
   - long_conv_list
   - long_conv_config_get
   - long_conv_config_set
-cli_commands:
-  - long-conv
+cli_commands: []

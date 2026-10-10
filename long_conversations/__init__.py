@@ -18,6 +18,8 @@ from .storage import (
     save_brief,
     save_config,
     set_pending_continuation,
+    record_session_usage,
+    get_session_usage,
 )
 from .telemetry import log_beta_event
 from .tools import (
@@ -65,24 +67,33 @@ def handle_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, str]]:
     3. Monitors context fill and generates handoff brief if threshold is reached.
     """
     platform = kwargs.get("platform", "")
-    if platform == "cron":
-        return None
-    if kwargs.get("is_subagent") or kwargs.get("subagent_id"):
+    if (
+        platform in ("cron", "subagent")
+        or kwargs.get("is_subagent")
+        or kwargs.get("subagent_id")
+        or kwargs.get("parent_session_id")
+    ):
         return None
 
     session_id = kwargs.get("session_id", "")
     scope_key = kwargs.get("chat_id") or kwargs.get("channel_id") or kwargs.get("sender_id") or ""
     is_first_turn = kwargs.get("is_first_turn", False)
 
+    # If there is a session-keyed continuation from a tool call in this session,
+    # resolve it to the active scope_key if available.
+    if session_id and scope_key:
+        sess_marker = f"sess_{session_id}"
+        sess_pending = get_pending_continuation(scope_key=sess_marker)
+        if sess_pending and sess_pending.get("session_id") == session_id:
+            set_pending_continuation(session_id, scope_key=scope_key)
+            clear_pending_continuation(scope_key=sess_marker)
+
     injection_context: Optional[str] = None
 
-    # First turn: check for pending continuation
-    if is_first_turn:
+    # First turn: check for pending continuation (scoped only, no unscoped fallback)
+    if is_first_turn and scope_key:
         try:
-            pending = get_pending_continuation(scope_key=scope_key or None)
-            if not pending and scope_key:
-                # Fallback to unscoped continuation if scoped was not found
-                pending = get_pending_continuation(scope_key=None)
+            pending = get_pending_continuation(scope_key=scope_key)
 
             if pending and "session_id" in pending:
                 parent_id = pending["session_id"]
@@ -96,18 +107,25 @@ def handle_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, str]]:
                     )
                     injection_context = format_brief_for_injection(brief)
                     logger.info("Long Conversations: Brief injected for session %s (from %s)", current_id, parent_id)
-                clear_pending_continuation(scope_key=scope_key or None)
-                if scope_key:
-                    clear_pending_continuation(scope_key=None)
+                clear_pending_continuation(scope_key=scope_key)
             prune_old_briefs(days=get_config().get("prune_days", 14))
         except Exception as e:
             logger.debug("Error during first-turn injection check: %s", e)
 
-    # Monitor context fill from payload
+    # Monitor context fill: check recorded usage from post_api_request or kwargs
     try:
         threshold_ratio = get_threshold_ratio_from_config()
-        tokens = kwargs.get("tokens") or kwargs.get("last_total_tokens") or 0
-        context_length = kwargs.get("context_length") or kwargs.get("context_window") or 0
+        usage_data = get_session_usage(session_id) if session_id else {}
+        tokens = (
+            kwargs.get("tokens")
+            or kwargs.get("last_total_tokens")
+            or usage_data.get("tokens", 0)
+        )
+        context_length = (
+            kwargs.get("context_length")
+            or kwargs.get("context_window")
+            or usage_data.get("context_length", 0)
+        )
         context_ratio = kwargs.get("context_ratio")
         
         triggered = False
@@ -134,6 +152,23 @@ def handle_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, str]]:
     return None
 
 
+def handle_post_api_request(**kwargs: Any) -> None:
+    """Observer hook after API response: record tokens and context length for threshold monitoring."""
+    session_id = kwargs.get("session_id")
+    if not session_id:
+        return
+    usage = kwargs.get("usage") or {}
+    total_tokens = usage.get("total_tokens") or usage.get("prompt_tokens") or 0
+    response = kwargs.get("response") or {}
+    context_length = (
+        kwargs.get("context_length")
+        or (response.get("usage") or {}).get("context_length")
+        or 0
+    )
+    if total_tokens:
+        record_session_usage(session_id, tokens=total_tokens, context_length=context_length)
+
+
 def handle_session_start(**kwargs: Any) -> None:
     """Session start lifecycle hook (no-op as injection moved to pre_llm_call)."""
     pass
@@ -147,6 +182,7 @@ def handle_session_end(**kwargs: Any) -> None:
 def register(ctx: Any) -> None:
     if hasattr(ctx, "register_hook"):
         ctx.register_hook("pre_llm_call", handle_pre_llm_call)
+        ctx.register_hook("post_api_request", handle_post_api_request)
         ctx.register_hook("on_session_start", handle_session_start)
         ctx.register_hook("on_session_end", handle_session_end)
 

@@ -10,6 +10,7 @@ from long_conversations.storage import (
     get_pending_continuation,
     clear_pending_continuation,
     get_base_dir,
+    get_session_usage,
 )
 from long_conversations.tools import (
     tool_long_conv_handoff,
@@ -50,38 +51,57 @@ def test_path_traversal_confinement(tmp_path):
 
 
 def test_tools_handler_contract():
-    # Handlers should strictly accept args: dict, **kwargs
-    handoff_res = tool_long_conv_handoff(
+    # Handlers should strictly accept args: dict, **kwargs and return JSON string
+    handoff_raw = tool_long_conv_handoff(
         {"topic": "Review", "work_in_progress": "Testing handlers"},
         session_id="sess_h1",
     )
+    assert isinstance(handoff_raw, str)
+    handoff_res = json.loads(handoff_raw)
     assert handoff_res["success"] is True
 
-    load_res = tool_long_conv_load({"session_id": "sess_h1"})
+    load_raw = tool_long_conv_load({"session_id": "sess_h1"})
+    assert isinstance(load_raw, str)
+    load_res = json.loads(load_raw)
     assert load_res["success"] is True
 
-    list_res = tool_long_conv_list()
+    list_raw = tool_long_conv_list()
+    assert isinstance(list_raw, str)
+    list_res = json.loads(list_raw)
     assert list_res["success"] is True
 
-    cfg_get = tool_long_conv_config_get()
+    cfg_get_raw = tool_long_conv_config_get()
+    assert isinstance(cfg_get_raw, str)
+    cfg_get = json.loads(cfg_get_raw)
     assert cfg_get["success"] is True
 
-    cfg_set = tool_long_conv_config_set({"aggressive_mode": False})
+    cfg_set_raw = tool_long_conv_config_set({"aggressive_mode": False})
+    assert isinstance(cfg_set_raw, str)
+    cfg_set = json.loads(cfg_set_raw)
     assert cfg_set["success"] is True
 
 
-def test_registry_dispatch_simulation():
-    # Simulate tools.registry.registry.dispatch
-    def simulate_dispatch(handler, args, **kwargs):
-        return handler(args, **kwargs)
+def test_registry_dispatch_direct():
+    # Test real dispatch through tools.registry.registry.dispatch
+    import tools.registry as tool_reg
 
-    res = simulate_dispatch(
-        tool_long_conv_handoff,
-        {"topic": "Dispatch test", "work_in_progress": "Verifying dispatch signature"},
-        session_id="sess_disp_1",
+    # Register tool if not already present
+    tool_reg.registry.register(
+        name="test_long_conv_handoff",
+        toolset="long-conversations",
+        schema={"name": "test_long_conv_handoff", "description": "test", "parameters": {"type": "object"}},
+        handler=tool_long_conv_handoff,
     )
+
+    res_raw = tool_reg.registry.dispatch(
+        "test_long_conv_handoff",
+        {"topic": "Dispatch test", "work_in_progress": "Verifying real dispatch"},
+        session_id="sess_disp_real",
+    )
+    assert isinstance(res_raw, str)
+    res = json.loads(res_raw)
     assert res["success"] is True
-    assert res["brief"]["source_session_id"] == "sess_disp_1"
+    assert res["brief"]["source_session_id"] == "sess_disp_real"
 
 
 def test_chat_scoped_continuation(tmp_path):
@@ -100,11 +120,12 @@ def test_chat_scoped_continuation(tmp_path):
 
 def test_cron_and_subagent_isolation(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    set_pending_continuation("sess_pending", base_dir=tmp_path / "long-conversations")
+    set_pending_continuation("sess_pending", scope_key="chat_test", base_dir=tmp_path / "long-conversations")
 
     # Cron should bypass injection
     cron_res = handle_pre_llm_call(
         platform="cron",
+        chat_id="chat_test",
         is_first_turn=True,
         session_id="cron_session",
     )
@@ -112,11 +133,30 @@ def test_cron_and_subagent_isolation(tmp_path, monkeypatch):
 
     # Subagent should bypass injection
     subagent_res = handle_pre_llm_call(
-        is_subagent=True,
+        platform="subagent",
+        chat_id="chat_test",
         is_first_turn=True,
         session_id="subagent_session",
     )
     assert subagent_res is None
+
+    # is_subagent flag should also bypass
+    subagent_flag_res = handle_pre_llm_call(
+        is_subagent=True,
+        chat_id="chat_test",
+        is_first_turn=True,
+        session_id="subagent_session_2",
+    )
+    assert subagent_flag_res is None
+
+    # parent_session_id should also bypass
+    parent_sess_res = handle_pre_llm_call(
+        parent_session_id="sess_parent_123",
+        chat_id="chat_test",
+        is_first_turn=True,
+        session_id="subagent_session_3",
+    )
+    assert parent_sess_res is None
 
 
 def test_pre_llm_call_first_turn_injection(tmp_path, monkeypatch):
@@ -160,3 +200,70 @@ def test_pre_llm_call_first_turn_injection(tmp_path, monkeypatch):
         context_length=1000,
     )
     assert turn2_res is None
+
+
+def test_post_api_request_and_threshold_monitoring(tmp_path, monkeypatch):
+    base_dir = tmp_path / "long-conversations"
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    # Record usage via post_api_request hook
+    from long_conversations import handle_post_api_request
+    handle_post_api_request(
+        session_id="sess_mon_1",
+        usage={"total_tokens": 850},
+        response={"usage": {"context_length": 1000}},
+    )
+
+    usage = get_session_usage("sess_mon_1")
+    assert usage.get("tokens") == 850
+    assert usage.get("context_length") == 1000
+
+    # Test pre_llm_call picking up the recorded usage without explicit tokens in kwargs
+    # Default threshold is 0.80, so 850/1000 = 85% should trigger
+    res = handle_pre_llm_call(
+        platform="discord",
+        chat_id="chat_mon",
+        session_id="sess_mon_1",
+        is_first_turn=False,
+    )
+    # Does not inject context on non-first-turn, but threshold check runs cleanly without exceptions
+    assert res is None
+
+
+def test_multi_user_isolation(tmp_path, monkeypatch):
+    base_dir = tmp_path / "long-conversations"
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    # User A creates handoff
+    tool_long_conv_handoff(
+        {"topic": "User A Secret", "work_in_progress": "Classified"},
+        session_id="sess_user_a",
+        sender_id="user_a",
+    )
+
+    # User B lists briefs -> should not see User A's brief
+    list_b_raw = tool_long_conv_list(sender_id="user_b")
+    list_b = json.loads(list_b_raw)
+    assert list_b["count"] == 0
+
+    # User A lists briefs -> sees their own brief
+    list_a_raw = tool_long_conv_list(sender_id="user_a")
+    list_a = json.loads(list_a_raw)
+    assert list_a["count"] == 1
+    assert list_a["briefs"][0]["source_session_id"] == "sess_user_a"
+
+    # User B attempts to load User A's brief -> denied
+    load_b_raw = tool_long_conv_load({"session_id": "sess_user_a"}, sender_id="user_b")
+    load_b = json.loads(load_b_raw)
+    assert load_b["success"] is False
+    assert "No brief found" in load_b["error"] or "denied" in load_b.get("error", "").lower()
+
+
+def test_scope_key_validation_with_matrix_identifiers(tmp_path):
+    base_dir = tmp_path / "long-conversations"
+    matrix_scope = "@alice:matrix.org"
+    set_pending_continuation("sess_matrix", scope_key=matrix_scope, base_dir=base_dir)
+
+    pending = get_pending_continuation(scope_key=matrix_scope, base_dir=base_dir)
+    assert pending is not None
+    assert pending["session_id"] == "sess_matrix"

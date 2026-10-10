@@ -1,3 +1,4 @@
+import json
 import pytest
 from pathlib import Path
 
@@ -103,17 +104,23 @@ def test_full_lifecycle_and_isolation_e2e(tmp_path, monkeypatch):
     assert next_turn_res is None
 
     # Step 4: Tool execution via standard dispatch contract (args: dict, **kwargs)
-    handoff_out = tool_long_conv_handoff(
+    handoff_out_raw = tool_long_conv_handoff(
         {"topic": "Second Phase", "work_in_progress": "Testing tools"},
         session_id="session_child_002",
         chat_id="channel_general",
     )
+    assert isinstance(handoff_out_raw, str)
+    handoff_out = json.loads(handoff_out_raw)
     assert handoff_out["success"] is True
 
-    list_out = tool_long_conv_list()
+    list_out_raw = tool_long_conv_list()
+    assert isinstance(list_out_raw, str)
+    list_out = json.loads(list_out_raw)
     assert list_out["success"] is True
     assert list_out["count"] >= 2
 
-    load_out = tool_long_conv_load({"session_id": "session_child_002"})
+    load_out_raw = tool_long_conv_load({"session_id": "session_child_002"})
+    assert isinstance(load_out_raw, str)
+    load_out = json.loads(load_out_raw)
     assert load_out["success"] is True
     assert "formatted_context" in load_out

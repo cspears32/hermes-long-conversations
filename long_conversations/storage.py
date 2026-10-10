@@ -23,6 +23,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+SCOPE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.@:-]{1,128}$")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "threshold_ratio": 0.80,
@@ -38,6 +39,15 @@ def validate_session_id(session_id: str) -> str:
             f"Invalid session_id: {session_id!r}. Must match regex '^[A-Za-z0-9_.-]{{1,128}}$'"
         )
     return session_id
+
+
+def validate_scope_key(scope_key: str) -> str:
+    """Validate scope_key matches ^[A-Za-z0-9_.@:-]{1,128}$."""
+    if not isinstance(scope_key, str) or not SCOPE_KEY_PATTERN.match(scope_key):
+        raise ValueError(
+            f"Invalid scope_key: {scope_key!r}. Must match regex '^[A-Za-z0-9_.@:-]{{1,128}}$'"
+        )
+    return scope_key
 
 
 def get_base_dir(hermes_home: Optional[Path | str] = None) -> Path:
@@ -69,7 +79,7 @@ def get_pending_continuation_path(scope_key: Optional[str] = None, base_dir: Opt
     base = base_dir or get_base_dir()
     base.mkdir(parents=True, exist_ok=True)
     if scope_key:
-        valid_key = validate_session_id(scope_key)
+        valid_key = validate_scope_key(scope_key)
         pending_dir = base / "pending"
         pending_dir.mkdir(parents=True, exist_ok=True)
         return pending_dir / f"{valid_key}.json"
@@ -93,25 +103,40 @@ def save_brief(brief: Dict[str, Any], base_dir: Optional[Path] = None) -> Path:
     return path
 
 
-def load_brief(session_id: str, base_dir: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+def load_brief(
+    session_id: str,
+    base_dir: Optional[Path] = None,
+    caller_sender_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     path = _safe_brief_path(session_id, base_dir)
     if not path.exists():
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            if caller_sender_id and data.get("sender_id"):
+                if data["sender_id"] != caller_sender_id:
+                    logger.warning("Access denied to brief %s for sender %s", session_id, caller_sender_id)
+                    return None
+            return data
     except Exception as e:
         logger.error("Failed to load brief %s: %s", session_id, e)
         return None
 
 
-def list_briefs(base_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+def list_briefs(
+    base_dir: Optional[Path] = None,
+    caller_sender_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     briefs = []
     briefs_dir = get_briefs_dir(base_dir)
     for p in briefs_dir.glob("*.json"):
         try:
             with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                if caller_sender_id and data.get("sender_id"):
+                    if data["sender_id"] != caller_sender_id:
+                        continue
                 briefs.append(data)
         except Exception:
             continue
@@ -125,6 +150,8 @@ def set_pending_continuation(
     base_dir: Optional[Path] = None,
 ) -> None:
     validate_session_id(session_id)
+    if scope_key:
+        validate_scope_key(scope_key)
     path = get_pending_continuation_path(scope_key, base_dir)
     payload = {
         "session_id": session_id,
@@ -173,6 +200,25 @@ def prune_old_briefs(days: int = 14, base_dir: Optional[Path] = None) -> int:
         except OSError:
             continue
     return pruned_count
+
+
+# ─── In-memory session usage tracking ───────────────────────────────────────
+
+_SESSION_USAGE: Dict[str, Dict[str, Any]] = {}
+
+
+def record_session_usage(session_id: str, tokens: int, context_length: int = 0) -> None:
+    """Record latest token usage and context window for a session."""
+    _SESSION_USAGE[session_id] = {
+        "tokens": tokens,
+        "context_length": context_length,
+        "updated_at": time.time(),
+    }
+
+
+def get_session_usage(session_id: str) -> Dict[str, Any]:
+    """Retrieve latest recorded token usage for a session."""
+    return _SESSION_USAGE.get(session_id, {})
 
 
 # ─── Config file support ───────────────────────────────────────────────────

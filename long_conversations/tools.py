@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -85,7 +86,7 @@ CONFIG_SET_SCHEMA = {
 }
 
 
-def tool_long_conv_handoff(args: dict, **kwargs: Any) -> Dict[str, Any]:
+def tool_long_conv_handoff(args: dict, **kwargs: Any) -> str:
     topic = args.get("topic", "")
     work_in_progress = args.get("work_in_progress", "")
     decisions_made = args.get("decisions_made")
@@ -95,7 +96,13 @@ def tool_long_conv_handoff(args: dict, **kwargs: Any) -> Dict[str, Any]:
     dead_ends = args.get("dead_ends")
     next_step = args.get("next_step", "")
     session_id = args.get("session_id") or kwargs.get("session_id") or "current_session"
-    scope_key = args.get("scope_key") or kwargs.get("chat_id") or kwargs.get("channel_id")
+    sender_id = args.get("sender_id") or kwargs.get("sender_id") or ""
+    scope_key = (
+        args.get("scope_key")
+        or kwargs.get("chat_id")
+        or kwargs.get("channel_id")
+        or (f"sess_{session_id}" if session_id else None)
+    )
 
     try:
         brief = create_handoff_brief(
@@ -109,49 +116,59 @@ def tool_long_conv_handoff(args: dict, **kwargs: Any) -> Dict[str, Any]:
             dead_ends=dead_ends,
             next_step=next_step,
         )
+        if sender_id:
+            brief["sender_id"] = sender_id
         save_brief(brief)
         set_pending_continuation(session_id, scope_key=scope_key)
         log_beta_event("handoff_created", {"session_id": session_id, "topic": topic})
-        return {
+        return json.dumps({
             "success": True,
             "message": f"Handoff brief saved for session '{session_id}'. Ready for continuation in a fresh session.",
             "brief": brief,
-        }
+        }, ensure_ascii=False)
     except Exception as e:
         logger.exception("Failed to create handoff brief: %s", e)
-        return {
+        return json.dumps({
             "success": False,
             "error": str(e),
-        }
+        }, ensure_ascii=False)
 
 
-def tool_long_conv_load(args: dict, **kwargs: Any) -> Dict[str, Any]:
+def tool_long_conv_load(args: dict, **kwargs: Any) -> str:
     session_id = args.get("session_id", "")
-    scope_key = args.get("scope_key") or kwargs.get("chat_id") or kwargs.get("channel_id")
+    caller_sender_id = args.get("sender_id") or kwargs.get("sender_id") or ""
+    scope_key = (
+        args.get("scope_key")
+        or kwargs.get("chat_id")
+        or kwargs.get("channel_id")
+        or (f"sess_{session_id}" if session_id else None)
+    )
     if not session_id:
-        return {"success": False, "error": "session_id is required"}
+        return json.dumps({"success": False, "error": "session_id is required"}, ensure_ascii=False)
 
-    brief = load_brief(session_id)
+    brief = load_brief(session_id, caller_sender_id=caller_sender_id or None)
     if not brief:
-        return {
+        return json.dumps({
             "success": False,
             "error": f"No brief found for session ID: {session_id}",
-        }
+        }, ensure_ascii=False)
     try:
         set_pending_continuation(session_id, scope_key=scope_key)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
-    return {
+    return json.dumps({
         "success": True,
         "message": f"Loaded brief for '{session_id}' as pending continuation.",
         "formatted_context": format_brief_for_injection(brief),
-    }
+    }, ensure_ascii=False)
 
 
-def tool_long_conv_list(args: Optional[dict] = None, **kwargs: Any) -> Dict[str, Any]:
-    briefs = list_briefs()
-    return {
+def tool_long_conv_list(args: Optional[dict] = None, **kwargs: Any) -> str:
+    args_dict = args or {}
+    caller_sender_id = args_dict.get("sender_id") or kwargs.get("sender_id") or ""
+    briefs = list_briefs(caller_sender_id=caller_sender_id or None)
+    return json.dumps({
         "success": True,
         "count": len(briefs),
         "briefs": [
@@ -162,20 +179,20 @@ def tool_long_conv_list(args: Optional[dict] = None, **kwargs: Any) -> Dict[str,
             }
             for b in briefs
         ],
-    }
+    }, ensure_ascii=False)
 
 
-def tool_long_conv_config_get(args: Optional[dict] = None, **kwargs: Any) -> Dict[str, Any]:
+def tool_long_conv_config_get(args: Optional[dict] = None, **kwargs: Any) -> str:
     """Return current plugin configuration."""
     config = get_config()
     config["aggressive_mode"] = is_aggressive_mode()
-    return {
+    return json.dumps({
         "success": True,
         "config": config,
-    }
+    }, ensure_ascii=False)
 
 
-def tool_long_conv_config_set(args: dict, **kwargs: Any) -> Dict[str, Any]:
+def tool_long_conv_config_set(args: dict, **kwargs: Any) -> str:
     """Update plugin configuration. Only sets fields that are provided."""
     config = get_config()
     changes = []
@@ -192,28 +209,28 @@ def tool_long_conv_config_set(args: dict, **kwargs: Any) -> Dict[str, Any]:
         try:
             val = float(threshold_ratio)
             if not (0.0 < val <= 1.0):
-                return {"success": False, "error": "threshold_ratio must be between 0.0 and 1.0"}
+                return json.dumps({"success": False, "error": "threshold_ratio must be between 0.0 and 1.0"}, ensure_ascii=False)
             config["threshold_ratio"] = val
             changes.append(f"threshold_ratio: {val}")
         except (ValueError, TypeError):
-            return {"success": False, "error": "threshold_ratio must be a valid float"}
+            return json.dumps({"success": False, "error": "threshold_ratio must be a valid float"}, ensure_ascii=False)
     
     if prune_days is not None:
         try:
             val = int(prune_days)
             if val < 1:
-                return {"success": False, "error": "prune_days must be >= 1"}
+                return json.dumps({"success": False, "error": "prune_days must be >= 1"}, ensure_ascii=False)
             config["prune_days"] = val
             changes.append(f"prune_days: {val}")
         except (ValueError, TypeError):
-            return {"success": False, "error": "prune_days must be a valid integer"}
+            return json.dumps({"success": False, "error": "prune_days must be a valid integer"}, ensure_ascii=False)
     
     if not changes:
-        return {"success": True, "message": "No changes specified", "config": config}
+        return json.dumps({"success": True, "message": "No changes specified", "config": config}, ensure_ascii=False)
     
     save_config(config)
-    return {
+    return json.dumps({
         "success": True,
         "message": f"Config updated: {', '.join(changes)}",
         "config": config,
-    }
+    }, ensure_ascii=False)

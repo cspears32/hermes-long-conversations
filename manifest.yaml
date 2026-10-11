@@ -4,10 +4,11 @@ description: "Persistent long-term conversations across session boundaries via s
 author: "cspears32"
 license: MIT
 category: tools
-requires_hermes: ">=0.19"
+requires_hermes: ">=0.21.6"
 capabilities:
   hooks:
     - pre_llm_call
+    - post_api_request
     - on_session_start
     - on_session_end
   tools:

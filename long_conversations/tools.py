@@ -10,6 +10,7 @@ from .monitor import is_aggressive_mode
 from .storage import (
     get_base_dir,
     get_config,
+    get_session_env,
     list_briefs,
     load_brief,
     save_brief,
@@ -34,8 +35,6 @@ HANDOFF_SCHEMA = {
             "open_questions": {"type": "array", "items": {"type": "string"}, "description": "Unresolved questions"},
             "dead_ends": {"type": "array", "items": {"type": "string"}, "description": "Approaches that failed"},
             "next_step": {"type": "string", "description": "Immediate next action"},
-            "session_id": {"type": "string", "description": "Optional session ID override"},
-            "scope_key": {"type": "string", "description": "Optional chat or scope key to bind continuation"},
         },
         "required": ["topic", "work_in_progress"],
     },
@@ -48,7 +47,6 @@ LOAD_SCHEMA = {
         "type": "object",
         "properties": {
             "session_id": {"type": "string", "description": "Session ID of the brief to load"},
-            "scope_key": {"type": "string", "description": "Optional chat or scope key to bind continuation"},
         },
         "required": ["session_id"],
     },
@@ -86,6 +84,30 @@ CONFIG_SET_SCHEMA = {
 }
 
 
+def _resolve_caller_identity(**kwargs: Any) -> tuple[str, Optional[str]]:
+    """Resolve caller's sender_id and scope_key from session context and kwargs."""
+    sender_id = get_session_env("HERMES_SESSION_USER_ID", "") or kwargs.get("sender_id") or ""
+    platform = get_session_env("HERMES_SESSION_PLATFORM", "") or kwargs.get("platform") or ""
+
+    chat_id = (
+        get_session_env("HERMES_SESSION_CHAT_ID", "")
+        or kwargs.get("chat_id")
+        or kwargs.get("channel_id")
+        or ""
+    )
+
+    if chat_id:
+        scope_key = chat_id
+    elif sender_id:
+        scope_key = sender_id
+    elif platform in ("cli", "terminal", ""):
+        scope_key = "local"
+    else:
+        scope_key = None
+
+    return sender_id, scope_key
+
+
 def tool_long_conv_handoff(args: dict, **kwargs: Any) -> str:
     topic = args.get("topic", "")
     work_in_progress = args.get("work_in_progress", "")
@@ -95,14 +117,8 @@ def tool_long_conv_handoff(args: dict, **kwargs: Any) -> str:
     open_questions = args.get("open_questions")
     dead_ends = args.get("dead_ends")
     next_step = args.get("next_step", "")
-    session_id = args.get("session_id") or kwargs.get("session_id") or "current_session"
-    sender_id = args.get("sender_id") or kwargs.get("sender_id") or ""
-    scope_key = (
-        args.get("scope_key")
-        or kwargs.get("chat_id")
-        or kwargs.get("channel_id")
-        or (f"sess_{session_id}" if session_id else None)
-    )
+    session_id = kwargs.get("session_id") or get_session_env("HERMES_SESSION_ID", "current_session")
+    sender_id, scope_key = _resolve_caller_identity(**kwargs)
 
     try:
         brief = create_handoff_brief(
@@ -119,7 +135,8 @@ def tool_long_conv_handoff(args: dict, **kwargs: Any) -> str:
         if sender_id:
             brief["sender_id"] = sender_id
         save_brief(brief)
-        set_pending_continuation(session_id, scope_key=scope_key)
+        if scope_key:
+            set_pending_continuation(session_id, scope_key=scope_key)
         log_beta_event("handoff_created", {"session_id": session_id, "topic": topic})
         return json.dumps({
             "success": True,
@@ -136,13 +153,7 @@ def tool_long_conv_handoff(args: dict, **kwargs: Any) -> str:
 
 def tool_long_conv_load(args: dict, **kwargs: Any) -> str:
     session_id = args.get("session_id", "")
-    caller_sender_id = args.get("sender_id") or kwargs.get("sender_id") or ""
-    scope_key = (
-        args.get("scope_key")
-        or kwargs.get("chat_id")
-        or kwargs.get("channel_id")
-        or (f"sess_{session_id}" if session_id else None)
-    )
+    caller_sender_id, scope_key = _resolve_caller_identity(**kwargs)
     if not session_id:
         return json.dumps({"success": False, "error": "session_id is required"}, ensure_ascii=False)
 
@@ -153,7 +164,8 @@ def tool_long_conv_load(args: dict, **kwargs: Any) -> str:
             "error": f"No brief found for session ID: {session_id}",
         }, ensure_ascii=False)
     try:
-        set_pending_continuation(session_id, scope_key=scope_key)
+        if scope_key:
+            set_pending_continuation(session_id, scope_key=scope_key)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
@@ -165,8 +177,7 @@ def tool_long_conv_load(args: dict, **kwargs: Any) -> str:
 
 
 def tool_long_conv_list(args: Optional[dict] = None, **kwargs: Any) -> str:
-    args_dict = args or {}
-    caller_sender_id = args_dict.get("sender_id") or kwargs.get("sender_id") or ""
+    caller_sender_id, _ = _resolve_caller_identity(**kwargs)
     briefs = list_briefs(caller_sender_id=caller_sender_id or None)
     return json.dumps({
         "success": True,

@@ -20,6 +20,12 @@ except ImportError:
         env_home = os.environ.get("HERMES_HOME")
         return Path(env_home) if env_home else Path.home() / ".hermes"
 
+try:
+    from gateway.session_context import get_session_env
+except ImportError:
+    def get_session_env(key: str, default: Optional[str] = None) -> Optional[str]:
+        return os.environ.get(key, default)
+
 logger = logging.getLogger(__name__)
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -114,8 +120,9 @@ def load_brief(
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            if caller_sender_id and data.get("sender_id"):
-                if data["sender_id"] != caller_sender_id:
+            brief_owner = data.get("sender_id")
+            if brief_owner:
+                if not caller_sender_id or caller_sender_id != brief_owner:
                     logger.warning("Access denied to brief %s for sender %s", session_id, caller_sender_id)
                     return None
             return data
@@ -134,8 +141,9 @@ def list_briefs(
         try:
             with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if caller_sender_id and data.get("sender_id"):
-                    if data["sender_id"] != caller_sender_id:
+                brief_owner = data.get("sender_id")
+                if brief_owner:
+                    if not caller_sender_id or caller_sender_id != brief_owner:
                         continue
                 briefs.append(data)
         except Exception:
@@ -205,10 +213,15 @@ def prune_old_briefs(days: int = 14, base_dir: Optional[Path] = None) -> int:
 # ─── In-memory session usage tracking ───────────────────────────────────────
 
 _SESSION_USAGE: Dict[str, Dict[str, Any]] = {}
+_MAX_SESSION_USAGE_ENTRIES = 500
 
 
 def record_session_usage(session_id: str, tokens: int, context_length: int = 0) -> None:
-    """Record latest token usage and context window for a session."""
+    """Record latest token usage and context window for a session, bounded to prevent memory growth."""
+    if len(_SESSION_USAGE) >= _MAX_SESSION_USAGE_ENTRIES and session_id not in _SESSION_USAGE:
+        oldest = min(_SESSION_USAGE.keys(), key=lambda k: _SESSION_USAGE[k].get("updated_at", 0))
+        _SESSION_USAGE.pop(oldest, None)
+
     _SESSION_USAGE[session_id] = {
         "tokens": tokens,
         "context_length": context_length,

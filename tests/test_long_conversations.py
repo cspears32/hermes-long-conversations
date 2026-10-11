@@ -80,11 +80,19 @@ def test_plugin_registration():
     register(ctx)
 
     assert "pre_llm_call" in ctx.hooks
+    assert "post_api_request" in ctx.hooks
     assert "on_session_start" in ctx.hooks
     assert "on_session_end" in ctx.hooks
     assert "long_conv_handoff" in ctx.tools
     assert "long_conv_load" in ctx.tools
     assert "long_conv_list" in ctx.tools
+
+    # Verify tool schemas do not expose internal session_id or scope_key overrides
+    from long_conversations.tools import HANDOFF_SCHEMA, LOAD_SCHEMA
+    assert "session_id" not in HANDOFF_SCHEMA["parameters"]["properties"]
+    assert "scope_key" not in HANDOFF_SCHEMA["parameters"]["properties"]
+    assert "scope_key" not in LOAD_SCHEMA["parameters"]["properties"]
+    assert "session_id" in LOAD_SCHEMA["parameters"]["properties"]
 
 
 def test_beta_telemetry_opt_in(tmp_path, monkeypatch):

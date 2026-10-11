@@ -76,17 +76,11 @@ def handle_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, str]]:
         return None
 
     session_id = kwargs.get("session_id", "")
-    scope_key = kwargs.get("chat_id") or kwargs.get("channel_id") or kwargs.get("sender_id") or ""
+    sender_id = kwargs.get("sender_id") or ""
+    scope_key = kwargs.get("chat_id") or kwargs.get("channel_id") or sender_id or ""
+    if not scope_key and platform in ("cli", "terminal", ""):
+        scope_key = "local"
     is_first_turn = kwargs.get("is_first_turn", False)
-
-    # If there is a session-keyed continuation from a tool call in this session,
-    # resolve it to the active scope_key if available.
-    if session_id and scope_key:
-        sess_marker = f"sess_{session_id}"
-        sess_pending = get_pending_continuation(scope_key=sess_marker)
-        if sess_pending and sess_pending.get("session_id") == session_id:
-            set_pending_continuation(session_id, scope_key=scope_key)
-            clear_pending_continuation(scope_key=sess_marker)
 
     injection_context: Optional[str] = None
 
@@ -138,12 +132,19 @@ def handle_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, str]]:
             if is_aggressive_mode():
                 history = kwargs.get("conversation_history") or []
                 brief = _extract_brief_from_history(history, session_id)
+                if sender_id:
+                    brief["sender_id"] = sender_id
                 save_brief(brief)
                 set_pending_continuation(brief["source_session_id"], scope_key=scope_key or None)
                 log_beta_event("auto_brief_generated", {"session_id": brief["source_session_id"]})
                 logger.info("Long Conversations: Auto-brief saved for session %s", brief["source_session_id"])
             else:
                 logger.info("Long Conversations: Token threshold reached (%.0f%%). Recommending handoff.", threshold_ratio * 100)
+                if not injection_context:
+                    injection_context = (
+                        f"Context threshold reached ({threshold_ratio * 100:.0f}%). "
+                        "Consider generating a handoff brief using long_conv_handoff to preserve state for continuation."
+                    )
     except Exception as e:
         logger.debug("Error during pre_llm_call threshold check: %s", e)
 

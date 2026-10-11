@@ -219,41 +219,48 @@ def test_post_api_request_and_threshold_monitoring(tmp_path, monkeypatch):
     assert usage.get("context_length") == 1000
 
     # Test pre_llm_call picking up the recorded usage without explicit tokens in kwargs
-    # Default threshold is 0.80, so 850/1000 = 85% should trigger
+    # Default threshold is 0.80, so 850/1000 = 85% should trigger a handoff recommendation injection
     res = handle_pre_llm_call(
         platform="discord",
         chat_id="chat_mon",
         session_id="sess_mon_1",
         is_first_turn=False,
     )
-    # Does not inject context on non-first-turn, but threshold check runs cleanly without exceptions
-    assert res is None
+    assert res is not None
+    assert "Context threshold reached (80%)" in res.get("context", "")
 
 
 def test_multi_user_isolation(tmp_path, monkeypatch):
     base_dir = tmp_path / "long-conversations"
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
-    # User A creates handoff
+    # User A creates handoff via context
+    monkeypatch.setenv("HERMES_SESSION_USER_ID", "user_a")
+    monkeypatch.setenv("HERMES_SESSION_ID", "sess_user_a")
     tool_long_conv_handoff(
         {"topic": "User A Secret", "work_in_progress": "Classified"},
         session_id="sess_user_a",
-        sender_id="user_a",
     )
 
-    # User B lists briefs -> should not see User A's brief
-    list_b_raw = tool_long_conv_list(sender_id="user_b")
+    # User B lists briefs via context -> should not see User A's brief
+    monkeypatch.setenv("HERMES_SESSION_USER_ID", "user_b")
+    monkeypatch.setenv("HERMES_SESSION_ID", "sess_user_b")
+    list_b_raw = tool_long_conv_list({})
     list_b = json.loads(list_b_raw)
     assert list_b["count"] == 0
 
-    # User A lists briefs -> sees their own brief
-    list_a_raw = tool_long_conv_list(sender_id="user_a")
+    # User A lists briefs via context -> sees their own brief
+    monkeypatch.setenv("HERMES_SESSION_USER_ID", "user_a")
+    monkeypatch.setenv("HERMES_SESSION_ID", "sess_user_a")
+    list_a_raw = tool_long_conv_list({})
     list_a = json.loads(list_a_raw)
     assert list_a["count"] == 1
     assert list_a["briefs"][0]["source_session_id"] == "sess_user_a"
 
-    # User B attempts to load User A's brief -> denied
-    load_b_raw = tool_long_conv_load({"session_id": "sess_user_a"}, sender_id="user_b")
+    # User B attempts to load User A's brief via context -> denied
+    monkeypatch.setenv("HERMES_SESSION_USER_ID", "user_b")
+    monkeypatch.setenv("HERMES_SESSION_ID", "sess_user_b")
+    load_b_raw = tool_long_conv_load({"session_id": "sess_user_a"})
     load_b = json.loads(load_b_raw)
     assert load_b["success"] is False
     assert "No brief found" in load_b["error"] or "denied" in load_b.get("error", "").lower()

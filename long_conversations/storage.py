@@ -120,8 +120,9 @@ def load_brief(
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            if caller_sender_id and data.get("sender_id"):
-                if data["sender_id"] != caller_sender_id:
+            brief_owner = data.get("sender_id")
+            if brief_owner:
+                if not caller_sender_id or caller_sender_id != brief_owner:
                     logger.warning("Access denied to brief %s for sender %s", session_id, caller_sender_id)
                     return None
             return data
@@ -140,8 +141,9 @@ def list_briefs(
         try:
             with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if caller_sender_id and data.get("sender_id"):
-                    if data["sender_id"] != caller_sender_id:
+                brief_owner = data.get("sender_id")
+                if brief_owner:
+                    if not caller_sender_id or caller_sender_id != brief_owner:
                         continue
                 briefs.append(data)
         except Exception:

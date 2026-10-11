@@ -231,36 +231,60 @@ def test_post_api_request_and_threshold_monitoring(tmp_path, monkeypatch):
 
 
 def test_multi_user_isolation(tmp_path, monkeypatch):
+    """Test multi-user isolation under real registry dispatch without synthetic kwargs."""
+    import tools.registry as tool_reg
+
     base_dir = tmp_path / "long-conversations"
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
-    # User A creates handoff via context
+    # Register tools into registry
+    tool_reg.registry.register(
+        name="long_conv_handoff",
+        toolset="long-conversations",
+        schema={"name": "long_conv_handoff", "description": "handoff", "parameters": {"type": "object"}},
+        handler=tool_long_conv_handoff,
+    )
+    tool_reg.registry.register(
+        name="long_conv_list",
+        toolset="long-conversations",
+        schema={"name": "long_conv_list", "description": "list", "parameters": {"type": "object"}},
+        handler=tool_long_conv_list,
+    )
+    tool_reg.registry.register(
+        name="long_conv_load",
+        toolset="long-conversations",
+        schema={"name": "long_conv_load", "description": "load", "parameters": {"type": "object"}},
+        handler=tool_long_conv_load,
+    )
+
+    # User A creates handoff via real registry dispatch (only session_id in kwargs, matching core dispatcher)
     monkeypatch.setenv("HERMES_SESSION_USER_ID", "user_a")
     monkeypatch.setenv("HERMES_SESSION_ID", "sess_user_a")
-    tool_long_conv_handoff(
+    tool_reg.registry.dispatch(
+        "long_conv_handoff",
         {"topic": "User A Secret", "work_in_progress": "Classified"},
         session_id="sess_user_a",
     )
 
-    # User B lists briefs via context -> should not see User A's brief
+    # User B lists briefs via real registry dispatch -> should not see User A's brief
     monkeypatch.setenv("HERMES_SESSION_USER_ID", "user_b")
     monkeypatch.setenv("HERMES_SESSION_ID", "sess_user_b")
-    list_b_raw = tool_long_conv_list({})
+    list_b_raw = tool_reg.registry.dispatch("long_conv_list", {}, session_id="sess_user_b")
     list_b = json.loads(list_b_raw)
     assert list_b["count"] == 0
 
-    # User A lists briefs via context -> sees their own brief
+    # User A lists briefs via real registry dispatch -> sees their own brief
     monkeypatch.setenv("HERMES_SESSION_USER_ID", "user_a")
     monkeypatch.setenv("HERMES_SESSION_ID", "sess_user_a")
-    list_a_raw = tool_long_conv_list({})
+    list_a_raw = tool_reg.registry.dispatch("long_conv_list", {}, session_id="sess_user_a")
     list_a = json.loads(list_a_raw)
     assert list_a["count"] == 1
     assert list_a["briefs"][0]["source_session_id"] == "sess_user_a"
 
-    # User B attempts to load User A's brief via context -> denied
+    # User B attempts to load User A's brief via real registry dispatch -> denied
     monkeypatch.setenv("HERMES_SESSION_USER_ID", "user_b")
     monkeypatch.setenv("HERMES_SESSION_ID", "sess_user_b")
-    load_b_raw = tool_long_conv_load({"session_id": "sess_user_a"})
+    load_b_raw = tool_reg.registry.dispatch("long_conv_load", {"session_id": "sess_user_a"}, session_id="sess_user_b")
     load_b = json.loads(load_b_raw)
     assert load_b["success"] is False
     assert "No brief found" in load_b["error"] or "denied" in load_b.get("error", "").lower()
@@ -274,3 +298,59 @@ def test_scope_key_validation_with_matrix_identifiers(tmp_path):
     pending = get_pending_continuation(scope_key=matrix_scope, base_dir=base_dir)
     assert pending is not None
     assert pending["session_id"] == "sess_matrix"
+
+
+def test_cli_and_terminal_default_scoping(tmp_path, monkeypatch):
+    """Test that CLI or terminal sessions without chat/sender context default to 'local' scope."""
+    import tools.registry as tool_reg
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "cli")
+    monkeypatch.delenv("HERMES_SESSION_USER_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_CHAT_ID", raising=False)
+
+    res_raw = tool_reg.registry.dispatch(
+        "long_conv_handoff",
+        {"topic": "CLI Task", "work_in_progress": "Local terminal work"},
+        session_id="sess_cli_1",
+    )
+    assert json.loads(res_raw)["success"] is True
+
+    # Pending continuation should be retrievable via 'local' scope
+    pending = get_pending_continuation(scope_key="local")
+    assert pending is not None
+    assert pending["session_id"] == "sess_cli_1"
+
+    # Pre-LLM call in CLI should pick up the continuation
+    injected = handle_pre_llm_call(platform="cli", session_id="sess_cli_2", is_first_turn=True)
+    assert injected is not None
+    assert "CLI Task" in injected.get("context", "")
+
+
+def test_multi_user_isolation_without_session_env(tmp_path, monkeypatch):
+    """Verify that if HERMES_SESSION_USER_ID is missing (e.g. anonymous or malformed runtime),
+    isolation defaults safely and briefs cannot be cross-loaded."""
+    import tools.registry as tool_reg
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("HERMES_SESSION_USER_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_ID", raising=False)
+
+    # Save a brief with sender_id stamped
+    save_brief({
+        "source_session_id": "sess_secret_user",
+        "sender_id": "user_protected",
+        "timestamp": "2026-10-10T12:00:00",
+        "topic": "Confidential",
+        "work_in_progress": "Do not leak",
+    })
+
+    # Unauthenticated/anonymous caller lists briefs -> should NOT receive user_protected's brief
+    list_raw = tool_reg.registry.dispatch("long_conv_list", {}, session_id="sess_anon")
+    list_res = json.loads(list_raw)
+    assert list_res["count"] == 0
+
+    # Unauthenticated caller tries to load user_protected's brief -> should fail
+    load_raw = tool_reg.registry.dispatch("long_conv_load", {"session_id": "sess_secret_user"}, session_id="sess_anon")
+    load_res = json.loads(load_raw)
+    assert load_res["success"] is False

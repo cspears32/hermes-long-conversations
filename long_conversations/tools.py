@@ -86,13 +86,13 @@ CONFIG_SET_SCHEMA = {
 
 def _resolve_caller_identity(**kwargs: Any) -> tuple[str, Optional[str]]:
     """Resolve caller's sender_id and scope_key from session context and kwargs."""
-    sender_id = get_session_env("HERMES_SESSION_USER_ID", "") or kwargs.get("sender_id") or ""
-    platform = get_session_env("HERMES_SESSION_PLATFORM", "") or kwargs.get("platform") or ""
+    sender_id = kwargs.get("sender_id") or get_session_env("HERMES_SESSION_USER_ID", "") or ""
+    platform = kwargs.get("platform") or get_session_env("HERMES_SESSION_PLATFORM", "") or ""
 
     chat_id = (
-        get_session_env("HERMES_SESSION_CHAT_ID", "")
-        or kwargs.get("chat_id")
+        kwargs.get("chat_id")
         or kwargs.get("channel_id")
+        or get_session_env("HERMES_SESSION_CHAT_ID", "")
         or ""
     )
 

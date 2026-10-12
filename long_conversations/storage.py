@@ -125,6 +125,11 @@ def load_brief(
                 if not caller_sender_id or caller_sender_id != brief_owner:
                     logger.warning("Access denied to brief %s for sender %s", session_id, caller_sender_id)
                     return None
+            else:
+                # Owner-less (CLI/local) brief: only accessible if caller has no sender_id
+                if caller_sender_id:
+                    logger.warning("Access denied to owner-less brief %s for gateway sender %s", session_id, caller_sender_id)
+                    return None
             return data
     except Exception as e:
         logger.error("Failed to load brief %s: %s", session_id, e)
@@ -144,6 +149,10 @@ def list_briefs(
                 brief_owner = data.get("sender_id")
                 if brief_owner:
                     if not caller_sender_id or caller_sender_id != brief_owner:
+                        continue
+                else:
+                    # Owner-less (CLI/local) brief: return only if caller has no sender_id
+                    if caller_sender_id:
                         continue
                 briefs.append(data)
         except Exception:

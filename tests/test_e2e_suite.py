@@ -37,13 +37,14 @@ def test_full_lifecycle_and_isolation_e2e(tmp_path, monkeypatch):
     res_turn = handle_pre_llm_call(
         platform="discord",
         chat_id="channel_general",
+        sender_id="user_general",
         session_id="session_parent_001",
         is_first_turn=False,
         context_ratio=0.85,  # Exceeds 80% threshold
         conversation_history=history,
     )
     # Aggressive auto-brief created and pending continuation set for channel_general
-    brief = load_brief("session_parent_001", base_dir=base_dir)
+    brief = load_brief("session_parent_001", base_dir=base_dir, caller_sender_id="user_general")
     assert brief is not None
     assert "auth architecture" in brief["topic"]
 
@@ -60,6 +61,7 @@ def test_full_lifecycle_and_isolation_e2e(tmp_path, monkeypatch):
     sub_res = handle_pre_llm_call(
         platform="discord",
         chat_id="channel_general",
+        sender_id="user_general",
         session_id="subagent_task_99",
         is_subagent=True,
         is_first_turn=True,
@@ -70,6 +72,7 @@ def test_full_lifecycle_and_isolation_e2e(tmp_path, monkeypatch):
     other_chat_res = handle_pre_llm_call(
         platform="discord",
         chat_id="channel_random",
+        sender_id="user_general",
         session_id="session_other_chat",
         is_first_turn=True,
     )
@@ -80,6 +83,7 @@ def test_full_lifecycle_and_isolation_e2e(tmp_path, monkeypatch):
     first_turn_res = handle_pre_llm_call(
         platform="discord",
         chat_id="channel_general",
+        sender_id="user_general",
         session_id="session_child_002",
         is_first_turn=True,
         context_ratio=0.10,
@@ -105,6 +109,7 @@ def test_full_lifecycle_and_isolation_e2e(tmp_path, monkeypatch):
 
     # Step 4: Tool execution via standard dispatch contract (args: dict, **kwargs)
     # With context environment set
+    monkeypatch.setenv("HERMES_SESSION_USER_ID", "user_general")
     monkeypatch.setenv("HERMES_SESSION_CHAT_ID", "channel_general")
     monkeypatch.setenv("HERMES_SESSION_ID", "session_child_002")
     handoff_out_raw = tool_long_conv_handoff(

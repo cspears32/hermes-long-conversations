@@ -33,6 +33,7 @@ from .tools import (
     tool_long_conv_handoff,
     tool_long_conv_list,
     tool_long_conv_load,
+    _resolve_caller_identity,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,10 +77,7 @@ def handle_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, str]]:
         return None
 
     session_id = kwargs.get("session_id", "")
-    sender_id = kwargs.get("sender_id") or ""
-    scope_key = kwargs.get("chat_id") or kwargs.get("channel_id") or sender_id or ""
-    if not scope_key and platform in ("cli", "terminal", ""):
-        scope_key = "local"
+    sender_id, scope_key = _resolve_caller_identity(**kwargs)
     is_first_turn = kwargs.get("is_first_turn", False)
 
     injection_context: Optional[str] = None
@@ -91,8 +89,10 @@ def handle_pre_llm_call(**kwargs: Any) -> Optional[Dict[str, str]]:
 
             if pending and "session_id" in pending:
                 parent_id = pending["session_id"]
-                brief = load_brief(parent_id)
-                if brief:
+                # Pass caller_sender_id; if sender_id is empty, load_brief allows owner-less briefs only when caller is unauthenticated
+                brief = load_brief(parent_id, caller_sender_id=sender_id or None)
+                # Owner-less briefs are only injected when scope is local OR if brief was created for this scope
+                if brief and (brief.get("sender_id") or scope_key == "local"):
                     current_id = session_id or "active_session"
                     record_lineage(
                         child_session_id=str(current_id),

@@ -165,6 +165,7 @@ def test_pre_llm_call_first_turn_injection(tmp_path, monkeypatch):
 
     brief_data = {
         "source_session_id": "parent_sess",
+        "sender_id": "user_100",
         "topic": "Handoff Topic",
         "work_in_progress": "Handoff WIP",
         "decisions_made": [],
@@ -181,6 +182,7 @@ def test_pre_llm_call_first_turn_injection(tmp_path, monkeypatch):
     turn1_res = handle_pre_llm_call(
         platform="discord",
         chat_id="chat_100",
+        sender_id="user_100",
         is_first_turn=True,
         session_id="child_sess",
         tokens=100,
@@ -354,3 +356,116 @@ def test_multi_user_isolation_without_session_env(tmp_path, monkeypatch):
     load_raw = tool_reg.registry.dispatch("long_conv_load", {"session_id": "sess_secret_user"}, session_id="sess_anon")
     load_res = json.loads(load_raw)
     assert load_res["success"] is False
+
+
+def test_unauthenticated_gateway_caller_cannot_access_cli_brief(tmp_path, monkeypatch):
+    """Test that a gateway user cannot load or list an owner-less CLI/local brief."""
+    import tools.registry as tool_reg
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    # Save a CLI brief without sender_id
+    save_brief({
+        "source_session_id": "sess_cli_secret",
+        "timestamp": "2026-10-10T12:00:00",
+        "topic": "Local CLI Secret",
+        "work_in_progress": "Do not leak to gateway users",
+    })
+
+    # 1. Gateway user lists briefs -> should NOT see the CLI brief
+    monkeypatch.setenv("HERMES_SESSION_USER_ID", "gateway_user_1")
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "discord")
+    list_raw = tool_reg.registry.dispatch("long_conv_list", {}, session_id="sess_gw_1")
+    list_res = json.loads(list_raw)
+    assert list_res["count"] == 0
+
+    # 2. Gateway user tries to load the CLI brief -> should be refused
+    load_raw = tool_reg.registry.dispatch("long_conv_load", {"session_id": "sess_cli_secret"}, session_id="sess_gw_1")
+    load_res = json.loads(load_raw)
+    assert load_res["success"] is False
+    assert "No brief found" in load_res["error"]
+
+    # 3. CLI user without sender_id CAN list and load it
+    monkeypatch.delenv("HERMES_SESSION_USER_ID", raising=False)
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "cli")
+    list_cli_raw = tool_reg.registry.dispatch("long_conv_list", {}, session_id="sess_cli_2")
+    list_cli_res = json.loads(list_cli_raw)
+    assert list_cli_res["count"] == 1
+    assert list_cli_res["briefs"][0]["source_session_id"] == "sess_cli_secret"
+
+    load_cli_raw = tool_reg.registry.dispatch("long_conv_load", {"session_id": "sess_cli_secret"}, session_id="sess_cli_2")
+    load_cli_res = json.loads(load_cli_raw)
+    assert load_cli_res["success"] is True
+
+
+def test_pre_llm_call_injection_with_core_kwargs_only(tmp_path, monkeypatch):
+    """Test handle_pre_llm_call receives only kwargs core actually passes:
+    session_id, platform, sender_id (and is_first_turn).
+    Asserts sender-stamped brief is injected on the next session's first turn.
+    """
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    # Sender creates a brief and sets pending continuation for sender scope
+    brief_data = {
+        "source_session_id": "orig_sess_1",
+        "sender_id": "core_user_42",
+        "topic": "Important Core Handoff",
+        "work_in_progress": "Working on core kwargs",
+        "next_step": "Complete verification",
+    }
+    save_brief(brief_data)
+    set_pending_continuation("orig_sess_1", scope_key="core_user_42")
+
+    # In the next session, core calls pre_llm_call with ONLY core kwargs:
+    # session_id, platform, sender_id, is_first_turn
+    injected = handle_pre_llm_call(
+        session_id="next_sess_2",
+        platform="discord",
+        sender_id="core_user_42",
+        is_first_turn=True,
+    )
+    assert injected is not None
+    assert "context" in injected
+    assert "Important Core Handoff" in injected["context"]
+    assert "orig_sess_1" in injected["context"]
+
+
+def test_channel_scoping_when_chat_id_differs_from_user_id(tmp_path, monkeypatch):
+    """Test cross-session continuation when chat_id != user_id (e.g. Discord channel or Telegram group).
+    Verifies tool sets continuation on chat_id, and handle_pre_llm_call matches via ambient chat_id.
+    """
+    import tools.registry as tool_reg
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    # Tool executes in a Discord channel where chat_id != user_id
+    monkeypatch.setenv("HERMES_SESSION_USER_ID", "discord_user_99")
+    monkeypatch.setenv("HERMES_SESSION_CHAT_ID", "channel_discord_777")
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "discord")
+    monkeypatch.setenv("HERMES_SESSION_ID", "sess_ch_1")
+
+    res_raw = tool_reg.registry.dispatch(
+        "long_conv_handoff",
+        {"topic": "Channel Collab Task", "work_in_progress": "Shared effort"},
+        session_id="sess_ch_1",
+    )
+    assert json.loads(res_raw)["success"] is True
+
+    # Continuation is set on scope "channel_discord_777"
+    pending = get_pending_continuation(scope_key="channel_discord_777")
+    assert pending is not None
+    assert pending["session_id"] == "sess_ch_1"
+
+    # Core starts next session in the same channel:
+    # Core passes session_id, platform, sender_id in kwargs; ambient env has HERMES_SESSION_CHAT_ID
+    monkeypatch.setenv("HERMES_SESSION_ID", "sess_ch_2")
+    injected = handle_pre_llm_call(
+        session_id="sess_ch_2",
+        platform="discord",
+        sender_id="discord_user_99",
+        is_first_turn=True,
+    )
+    assert injected is not None
+    assert "context" in injected
+    assert "Channel Collab Task" in injected["context"]
+
